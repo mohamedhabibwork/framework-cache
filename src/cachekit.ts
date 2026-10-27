@@ -76,9 +76,14 @@ class BunRedisTransport implements CacheKitRedisClient {
 }
 
 /** Creates the in-process cachekit engine behind the memory driver. */
-export function createMemoryEngine(): CacheEngine<'memory'> {
+export function createMemoryEngine(
+  options: { readonly defaultTtlMs?: number; readonly maxEntries?: number } = {},
+): CacheEngine<'memory'> {
   // No cachekit namespace: memory keys stay exactly as the application wrote them.
-  return createMemoryCache();
+  return createMemoryCache({
+    ...(options.defaultTtlMs !== undefined ? { defaultTtl: options.defaultTtlMs } : {}),
+    ...(options.maxEntries !== undefined ? { maxEntries: options.maxEntries } : {}),
+  });
 }
 
 /**
@@ -94,9 +99,14 @@ export function redisNamespace(options: RedisCacheOptions, scope: RedisScope): s
  * to `<prefix>:<scope>:` so cache keys, locks and rate-limit counters never
  * share key ranges.
  */
-export function createRedisEngine(options: RedisCacheOptions, scope: RedisScope): Promise<CacheEngine<'redis'>> {
+export function createRedisEngine(
+  options: RedisCacheOptions,
+  scope: RedisScope,
+  engineOptions: { readonly defaultTtlMs?: number } = {},
+): Promise<CacheEngine<'redis'>> {
   return createRedisCompatibleCache('redis', {
     client: new BunRedisTransport(options.url),
     namespace: redisNamespace(options, scope),
+    ...(engineOptions.defaultTtlMs !== undefined ? { defaultTtl: engineOptions.defaultTtlMs } : {}),
   });
 }

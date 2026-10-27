@@ -14,6 +14,13 @@ export const cacheConfigSchema = z.object({
       prefix: z.string().min(1),
     })
     .optional(),
+  /** Engine options forwarded to cachekit (default TTL, memory entry cap). */
+  options: z
+    .object({
+      defaultTtlSeconds: z.number().positive().optional(),
+      maxEntries: z.number().int().positive().optional(),
+    })
+    .optional(),
 });
 
 /**
@@ -40,7 +47,13 @@ export const createCacheProvider = <TConfig extends object>(
       const redis: RedisCacheOptions | undefined =
         parsed.data.driver === 'redis' ? requireRedisOptions(parsed.data.redis) : undefined;
 
-      const cache: Cache = redis ? new RedisCache(redis) : new MemoryCache();
+      const engineOptions = {
+        ...(parsed.data.options?.defaultTtlSeconds !== undefined
+          ? { defaultTtlMs: Math.max(1, Math.round(parsed.data.options.defaultTtlSeconds * 1000)) }
+          : {}),
+        ...(parsed.data.options?.maxEntries !== undefined ? { maxEntries: parsed.data.options.maxEntries } : {}),
+      };
+      const cache: Cache = redis ? new RedisCache(redis, engineOptions) : new MemoryCache(engineOptions);
       const locks: LockStore = redis ? new RedisLockStore(redis) : new MemoryLockStore();
       const limiter: RateLimiter = redis ? new RedisRateLimiter(redis) : new MemoryRateLimiter();
 

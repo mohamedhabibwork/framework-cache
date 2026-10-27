@@ -35,6 +35,63 @@ export interface IncrementOptions {
 }
 
 /**
+ * Provider-native options bag, forwarded verbatim to the cachekit engine and
+ * from there to the provider. cachekit ships no native options of its own today
+ * (its maps are empty), so this exists for custom engines and future drivers.
+ */
+export type NativeOptions = Readonly<Record<string, unknown>>;
+
+/** Options for `set` / `setMany` (cachekit's `SetOptions`). */
+export interface SetOptions {
+  /** Time to live in seconds (fractions allowed, ms precision). */
+  readonly ttlSeconds?: number;
+  /**
+   * Serve stale for this many seconds after expiry while one caller refreshes.
+   * Requires `get({ allowStale: true })` or `getOrSet({ serveStale: true })`.
+   */
+  readonly staleTtlSeconds?: number;
+  /** Tags for group invalidation (`invalidateTags`). Requires the `tags` capability. */
+  readonly tags?: readonly string[];
+  readonly signal?: AbortSignal;
+  readonly native?: NativeOptions;
+}
+
+/** Options for `get` / `has` / `getMany`. */
+export interface GetOptions {
+  /** Return an expired-but-still-in-stale-window entry instead of a miss. */
+  readonly allowStale?: boolean;
+  readonly signal?: AbortSignal;
+  readonly native?: NativeOptions;
+}
+
+/** Options for `getOrSet` (read-through with single-flight and stale serving). */
+export interface GetOrSetOptions extends SetOptions {
+  /** Serve a stale value instead of waiting for the refresh. */
+  readonly serveStale?: boolean;
+}
+
+/** One entry of `setMany`. */
+export interface CacheEntryInput<T = unknown> {
+  readonly key: string;
+  readonly value: T;
+  readonly options?: SetOptions;
+}
+
+/** Result of `invalidateTags` (cachekit reports how and how many). */
+export interface TagInvalidationResult {
+  readonly invalidated: number;
+  readonly mode: 'delete' | 'versioned' | 'unsupported';
+}
+
+/** Provider health, when the engine can report it. */
+export interface CacheHealth {
+  readonly status: 'ok' | 'degraded' | 'error';
+  readonly provider: string;
+  readonly latency: number;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+/**
  * Application cache contract (spec §7). Two drivers: `MemoryCache` for
  * development/tests and `RedisCache` for state shared across instances.
  *
@@ -55,14 +112,46 @@ export interface IncrementOptions {
 export interface Cache {
   readonly capabilities: CacheCapabilities;
   /** Typed read; resolves null on miss. A corrupt stored payload rejects with `CACHE_DESERIALIZATION_FAILED`. */
-  get<T>(key: string): Promise<T | null>;
-  /** JSON-serializes `value`; rejects with `CACHE_SERIALIZATION_FAILED` for non-JSON values. */
-  set<T>(key: string, value: T, ttlSeconds?: number): Promise<void>;
+  get<T>(key: string, options?: GetOptions): Promise<T | null>;
+  /**
+   * JSON-serializes `value`; rejects with `CACHE_SERIALIZATION_FAILED` for
+   * non-JSON values. Accepts a bare TTL in seconds (the original signature) or
+   * the full {@link SetOptions} (`staleTtlSeconds`, `tags`, `native`, …).
+   */
+  set<T>(key: string, value: T, ttlOrOptions?: number | SetOptions): Promise<void>;
+  /** Batched read; the map only contains keys that hit. */
+  getMany<T>(keys: readonly string[], options?: GetOptions): Promise<Map<string, T>>;
+  /** Batched write; each entry may carry its own options, merged over `options`. */
+  setMany(entries: readonly CacheEntryInput[], options?: SetOptions): Promise<void>;
   /** Removes a key; resolves whether an unexpired entry existed. */
   delete(key: string): Promise<boolean>;
-  has(key: string): Promise<boolean>;
+  /** Removes many keys; resolves the number deleted. */
+  deleteMany(keys: readonly string[]): Promise<number>;
+  has(key: string, options?: GetOptions): Promise<boolean>;
   /** Read-through memoization: cached hit, otherwise stores `factory()`'s result under `ttlSeconds`. */
   remember<T>(key: string, ttlSeconds: number, factory: () => T | Promise<T>): Promise<T>;
+  /**
+   * Read-through with single-flight deduplication and optional stale serving.
+   * Rejects with `CACHE_UNSUPPORTED_OPERATION` when `tags` are requested on a
+   * driver without tag support (never silently drops the tag).
+   */
+  getOrSet<T>(
+    key: string,
+    loader: (context: { signal: AbortSignal }) => T | Promise<T>,
+    options?: GetOrSetOptions,
+  ): Promise<T>;
+  /** Extends a key's TTL; resolves false when the key is missing. */
+  touch(key: string, ttlSeconds: number, options?: GetOptions): Promise<boolean>;
+  /**
+   * Invalidates every entry carrying one of `tags`. Requires the `tags`
+   * capability (memory: yes, redis: no — rejects with
+   * `CACHE_UNSUPPORTED_OPERATION`).
+   */
+  invalidateTags(tags: readonly string[], options?: GetOptions): Promise<TagInvalidationResult>;
+  /** Provider health as reported by the engine. */
+  health(): Promise<CacheHealth>;
+  /** The native cachekit client (or provider client) behind this cache. */
+  native(): unknown;
   /** Atomic integer counter; a missing key is created at `by`. */
   increment(key: string, options?: IncrementOptions): Promise<number>;
   /** `increment` with a negated `by`. */
@@ -132,7 +221,20 @@ export interface RedisCacheOptions {
   readonly prefix: string;
 }
 
+/**
+ * Engine-level cache options forwarded to cachekit when the driver is created.
+ * They apply to the cache, lock and rate-limit engines alike.
+ */
+export interface CacheEngineOptions {
+  /** TTL (seconds) applied when `set`/`setMany` omit one. */
+  readonly defaultTtlSeconds?: number;
+  /** Upper bound on in-process entries (memory driver only). */
+  readonly maxEntries?: number;
+}
+
 export interface CacheProviderConfig {
   readonly driver?: CacheDriverKind;
   readonly redis?: RedisCacheOptions;
+  /** Engine options (default TTL, memory entry cap). */
+  readonly options?: CacheEngineOptions;
 }
