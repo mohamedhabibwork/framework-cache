@@ -72,7 +72,9 @@ export class CachekitCache implements Cache {
     try {
       // The engine deduplicates concurrent loads; values still pass the
       // serialization contract before they are stored.
-      return await (await this.#engine).getOrSet<T>(
+      return await (
+        await this.#engine
+      ).getOrSet<T>(
         key,
         async () => {
           const value = await factory();
