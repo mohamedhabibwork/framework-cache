@@ -6,7 +6,7 @@ import { MemoryLockStore, RedisLockStore } from './locks';
 import { MemoryRateLimiter, RedisRateLimiter } from './rate-limiter';
 import type { Cache, CacheProviderConfig, LockStore, RateLimiter, RedisCacheOptions } from './types';
 
-const providerConfigSchema = z.object({
+export const cacheConfigSchema = z.object({
   driver: z.enum(['memory', 'redis']).default('memory'),
   redis: z
     .object({
@@ -33,7 +33,7 @@ export const createCacheProvider = <TConfig extends object>(
   defineProvider<TConfig>({
     name: 'cache',
     register({ container, config }) {
-      const parsed = providerConfigSchema.safeParse(select(config));
+      const parsed = cacheConfigSchema.safeParse(select(config));
       if (!parsed.success) {
         throw new ConfigError(parsed.error.issues.map((issue) => `cache.${issue.path.join('.')}: ${issue.message}`));
       }
